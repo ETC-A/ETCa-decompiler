@@ -24,7 +24,7 @@ def calculated_percent_used(bit_count: int = 8, print_all=True):
 
 def decode_print(b: bytes):
     for res in decode(b.hex()):
-        print(b.hex(sep=' ')+ ':', res.with_prefix, res.required_extensions)
+        print(b.hex(sep=' ') + ':', res.with_prefix, res.required_extensions)
 
 
-decode_print(bitarray("00 01 1100 000 000 00").tobytes())
+decode_print(b"\xFB\x12\x34\x12\x34\x12\x34\x12\x34")
