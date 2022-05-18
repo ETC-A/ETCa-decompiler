@@ -46,3 +46,31 @@ def expanded_reg_immediate(C5, SS, C4, AAA, IIIII):
                     arg2=imm.dec())
         yield DecodedInstruction(opcode.format_string.format(**args),
                                  (*SIZES[SS][1], "expanded-opcodes", *opcode.required_extensions))
+
+
+_REQUIRED = [
+    ('expanded-opcodes',),
+    ('expanded-opcodes',),
+    ('expanded-opcodes', '32bit-addresses',),
+    ('expanded-opcodes', '64bit-addresses',),
+]
+
+
+@pat("111 10 0 SS {disp:(2**SS)*8}")
+def rel_jump(SS, disp):
+    yield DecodedInstruction(f"jump {label(rel_target=disp.signed())}", _REQUIRED[SS])
+
+
+@pat("111 10 1 SS {target:(2**SS)*8}")
+def abs_jump(SS, target):
+    yield DecodedInstruction(f"jump {label(abs_target=target)}", _REQUIRED[SS])
+
+
+@pat("111 11 0 SS {disp:(2**SS)*8}")
+def rel_call(SS, disp):
+    yield DecodedInstruction(f"call {label(rel_target=disp.signed())}", _REQUIRED[SS])
+
+
+@pat("111 11 1 SS {target:(2**SS)*8}")
+def abs_call(SS, target):
+    yield DecodedInstruction(f"call {label(abs_target=target)}", _REQUIRED[SS])

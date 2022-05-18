@@ -23,7 +23,9 @@ class ResultInt(int):
     def unsigned(self, bit_size: int):
         return ResultInt(self & ((1 << bit_size) - 1), bit_size)
 
-    def signed(self, bit_size: int):
+    def signed(self, bit_size: int = None):
+        if bit_size is None:
+            bit_size = self.bit_size
         val = self & ((1 << bit_size) - 1)
         if val & (1 << (bit_size - 1)):
             val |= -(1 << (bit_size))
@@ -103,8 +105,11 @@ class Pattern:
             elif s[0] == '{':
                 assert s[-1] == '}'
                 name, size = s[1:-1].split(':')
-                size = int(size)
-                out.append(BoundFixedSize(size, name))
+                if size.isdigit():
+                    size = int(size)
+                    out.append(BoundFixedSize(size, name))
+                else:
+                    out.append(BoundDynamicSize(size, name))
         if len(out) == 1:
             return out[0]
         else:
@@ -127,6 +132,18 @@ class BoundFixedSize(Pattern):
 
     def parse(self, context: ParseContext) -> bool:
         val = context.read(self.bit_count)
+        context.bind(self.name, val)
+        return True
+
+
+@dataclass
+class BoundDynamicSize(Pattern):
+    size_expr: str
+    name: str
+
+    def parse(self, context: ParseContext) -> bool:
+        bit_count = eval(self.size_expr, {}, context.bound_values)
+        val = context.read(bit_count)
         context.bind(self.name, val)
         return True
 
