@@ -51,7 +51,7 @@ def expanded_reg_immediate(C5, SS, C4, AAA, IIIII):
 _REQUIRED = [
     ('expanded-opcodes',),
     ('expanded-opcodes',),
-    ('expanded-opcodes', '32bit-addresses',),
+    ('expanded-opcodes', ('32bit-addresses', '64bit-addresses'),),  # Nested tuple means on of those
     ('expanded-opcodes', '64bit-addresses',),
 ]
 

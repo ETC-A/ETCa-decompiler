@@ -64,7 +64,7 @@ class ResultInt(int):
 @dataclass
 class DecodedInstruction:
     assembly: str
-    required_extensions: tuple[str, ...]
+    required_extensions: tuple[str | tuple[str, ...], ...]
     is_prefix: bool = False
     prefix_list: list[DecodedInstruction] = field(default_factory=list)
 
