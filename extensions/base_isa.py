@@ -40,7 +40,7 @@ BASE_OPCODES = {
 
 
 @pat("00 SS CCCC  AAA BBB 00")
-def two_register(SS, CCCC, AAA, BBB):
+def reg_reg(SS, CCCC, AAA, BBB):
     check(SS in SIZES)
     opcodes = BASE_OPCODES[CCCC]
     for opcode in opcodes:
@@ -57,7 +57,7 @@ def two_register(SS, CCCC, AAA, BBB):
 
 
 @pat("01 SS CCCC  AAA IIIII")
-def immediate(SS, CCCC, AAA, IIIII):
+def reg_immediate(SS, CCCC, AAA, IIIII):
     check(SS in SIZES)
     opcodes = BASE_OPCODES[CCCC]
     for opcode in opcodes:
@@ -71,7 +71,7 @@ def immediate(SS, CCCC, AAA, IIIII):
             continue
         args = dict(name=opcode.name,
                     size=SIZES[SS][0],
-                    arg1=f"%r{AAA.dec(1)}",
+                    arg1=f"%r{SIZES[SS][0]}{AAA.dec(1)}",
                     arg2=imm.dec())
         yield DecodedInstruction(opcode.format_string.format(**args),
                                  (*SIZES[SS][1], *opcode.required_extensions))

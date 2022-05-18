@@ -66,6 +66,10 @@ class DecodedInstruction:
     is_prefix: bool = False
     prefix_list: list[DecodedInstruction] = field(default_factory=list)
 
+    @property
+    def with_prefix(self):
+        return " ".join([i.assembly for i in (*self.prefix_list, self)])
+
 
 @dataclass
 class ParseContext:
@@ -132,9 +136,17 @@ class PatternList(Pattern):
     patterns: list[Pattern]
 
     def parse(self, context: ParseContext) -> bool:
-        for p in self.patterns:
-            if not p.parse(context):
-                return False
+        for i,p in enumerate(self.patterns):
+            try:
+                if not p.parse(context):
+                    # print(f"Failed {i}/{len(self.patterns)}", p, context)
+                    return False
+                else:
+                    # print(f"Success {i}/{len(self.patterns)}", p, context)
+                    pass
+            except BaseException as e:
+                # print(f"Exception {i}/{len(self.patterns)}", p, e)
+                raise
         return True
 
 
@@ -169,7 +181,7 @@ def label(*, rel_target=None, abs_target=None):
 
 
 def decode(bits: bitarray | str, prefix: list[DecodedInstruction] = None) -> Iterable[DecodedInstruction]:
-    prefix = []
+    prefix = prefix or []
     if isinstance(bits, str):
         bits = hex2ba(bits)
     for p, f in _pattern_register:

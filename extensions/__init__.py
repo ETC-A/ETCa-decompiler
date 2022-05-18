@@ -4,3 +4,5 @@ import extensions.half_word_operations
 import extensions.double_word_operations
 import extensions.quad_word_operations
 import extensions.conditional_prefix
+import extensions.expanded_opcodes
+import extensions.arbitrary_stack_pointer

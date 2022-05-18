@@ -34,4 +34,5 @@ def reg_call(RRR, CCCC):
 
 @pat("10 1 1 {dest:12}")
 def call_rel(dest):
+    dest = dest.signed(12)
     yield DecodedInstruction(f"call {label(rel_target=dest)}", ('stack-and-functions',))
