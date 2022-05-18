@@ -3,11 +3,11 @@ from decoder_lib import pat, label, check, DecodedInstruction
 from .base_isa import BASE_OPCODES, BaseIsaOpcodeInfo, BASE_CONDITIONS
 
 BASE_OPCODES[12].append(BaseIsaOpcodeInfo("pop", "{name}{size} {arg2}", has_reg_immediate=False,
-                                          extra_check=lambda A, B: B == 6,
+                                          extra_check=lambda A, B: B == 6, sign_extend=False,
                                           required_extensions=('stack-and-functions',)))
 
 BASE_OPCODES[13].append(BaseIsaOpcodeInfo("push", "{name}{size} {arg1}",
-                                          extra_check=lambda A, B: A == 6,
+                                          extra_check=lambda A, B: A == 6, sign_extend=False,
                                           required_extensions=('stack-and-functions',)))
 
 
