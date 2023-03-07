@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Iterable, Callable
+from collections import defaultdict, ChainMap
+from dataclasses import dataclass, field, InitVar
+from typing import Iterable, Callable, Any, TypeAlias, Sequence
 
 from bitarray import bitarray
 from bitarray.util import ba2int, hex2ba
@@ -19,15 +20,36 @@ class _NotEnoughBits(Exception):
     pass
 
 
-class ResultInt(int):
-    def unsigned(self, bit_size: int):
-        return ResultInt(self & ((1 << bit_size) - 1), bit_size)
+BitIndex: TypeAlias = int
+BitSection: TypeAlias = Sequence[int]
 
-    def signed(self, bit_size: int):
-        val = self & ((1 << bit_size) - 1)
+
+@dataclass(frozen=True)
+class BitVector:
+    value: int
+    bit_size: int
+    bit_section: BitSection = ()
+
+    def unsigned(self, bit_size: int = None):
+        if bit_size is None:
+            bit_size = self.bit_size
+        return BitVector(
+            self.value & ((1 << bit_size) - 1),
+            bit_size,
+            self.bit_section
+        )
+
+    def signed(self, bit_size: int = None):
+        if bit_size is None:
+            bit_size = self.bit_size
+        val = self.value & ((1 << bit_size) - 1)
         if val & (1 << (bit_size - 1)):
             val |= -(1 << (bit_size))
-        return ResultInt(val, bit_size)
+        return BitVector(
+            val,
+            bit_size,
+            self.bit_section
+        )
 
     def dec(self, size: int = None):
         if size:
@@ -35,57 +57,169 @@ class ResultInt(int):
         else:
             return str(self.value)
 
+    def __index__(self):
+        return self.value
+
+    def __int__(self):
+        return self.value
+
     def __str__(self):
         return f"{self.value:0{self.bit_size}b}"
 
     def __repr__(self):
-        return f"{type(self).__name__}({self.value}, {self.bit_size})"
+        return f"{type(self).__name__}({self.value}, {self.bit_size}, {self.bit_section})"
 
-    def __new__(cls, value, bit_size):
-        out = super(ResultInt, cls).__new__(cls, value)
-        out.value = int(value)
-        out.bit_size = bit_size
-        return out
+    def __eq__(self, other):
+        if isinstance(other, int):
+            return other == self.value
+        elif isinstance(other, BitVector):
+            return self.value == other.value
+        else:
+            return False
+
+    def __hash__(self):
+        return hash(self.value)
 
     def __matmul__(self, other):
-        if not isinstance(other, ResultInt):
+        if not isinstance(other, BitVector):
             return NotImplemented
-        return ResultInt((self.value << other.bit_size) | other.value, self.bit_size + other.bit_size)
+        return BitVector(
+            (self.value << other.bit_size) | other.value,
+            self.bit_size + other.bit_size,
+            tuple(self.bit_section) + tuple(other.bit_section)
+        )
 
-    def __rmatmul__(self, other):
-        if not isinstance(other, int):
-            return NotImplemented
-        assert other >= 0, other
-        return ResultInt((other << self.bit_size) | self.value, self.bit_size + other.bit_length())
+
+class RenderContext:
+    pass
+
+
+class DecodedPart:
+    bit_section: BitSection
+    required_extensions: tuple[str, ...]
+
+    def render(self, context: RenderContext) -> str:
+        raise NotImplementedError
 
 
 @dataclass
-class DecodedInstruction:
-    assembly: str
-    required_extensions: tuple[str, ...]
-    is_prefix: bool = False
-    prefix_list: list[DecodedInstruction] = field(default_factory=list)
+class DecodedAtom(DecodedPart):
+    bit_section: BitSection
+    name: str
+    value: str
+
+    def render(self, context: RenderContext) -> str:
+        return self.value
+
+
+@dataclass
+class DecodedJumpTarget(DecodedPart):
+    bit_section: BitSection
+    is_relative: bool
+    value: BitVector
+    instruction_start: BitIndex = None
+
+    def render(self, context: RenderContext) -> str:
+        if self.is_relative:
+            return f"(rel_target: {self.value.signed().dec()})"
+        else:
+            return f"(abs_target: {self.value.unsigned().dec()})"
+
+
+@dataclass
+class DecodedInstruction(DecodedPart):
+    format_string: str
+    values: dict[str, DecodedPart | list[DecodedPart]]
+    general_bit_section: BitSection
+
+    def render(self, context: RenderContext) -> str:
+        strings = {}
+        for name, val in self.values.items():
+            if isinstance(val, list):
+                strings[name] = ' '.join(v.render(context) for v in val)
+            else:
+                strings[name] = val.render(context)
+        return self.format_string.format(**strings)
 
     @property
-    def with_prefix(self):
-        return " ".join([i.assembly for i in (*self.prefix_list, self)])
+    def bit_section(self):
+        return tuple(sorted(set(self.general_bit_section).union(*(v.bit_section
+                                                                  for val in self.values.values()
+                                                                  for v in (val if isinstance(val, list) else [val])))))
+
+    @property
+    def required_extensions(self):
+        return tuple(set().union(*(v.required_extensions
+                                   for val in self.values.values()
+                                   for v in (val if isinstance(val, list) else [val]))))
 
 
 @dataclass
 class ParseContext:
     bits: bitarray
-    i: int = 0
-    bound_values: dict[str, int] = field(default_factory=dict)
+    start_i: InitVar[int] = 0
+    bound_values: ChainMap[str, BitVector] = field(default_factory=ChainMap)
 
-    def read(self, bit_count: int) -> ResultInt:
+    def __post_init__(self, start_i: int):
+        self.i = start_i
+
+    def read(self, bit_count: int) -> BitVector:
         if self.i + bit_count > len(self.bits):
             raise _NotEnoughBits((self.i, bit_count, self.bits))
         self.i += bit_count
-        return ResultInt(ba2int(self.bits[self.i - bit_count:self.i]), bit_count)
+        return BitVector(ba2int(self.bits[self.i - bit_count:self.i]), bit_count,
+                         range(self.i - bit_count, self.i))
 
-    def bind(self, name: str, value: int):
+    def bind(self, name: str, value: BitVector):
         assert name not in self.bound_values, name
         self.bound_values[name] = value
+
+    @property
+    def i(self):
+        return self.bound_values.get("__i", 0)
+
+    @i.setter
+    def i(self, value):
+        self.bound_values["__i"] = value
+
+    @property
+    def other_bits(self):
+        return self.bound_values.get("__other", ())
+
+    @other_bits.setter
+    def other_bits(self, value):
+        self.bound_values["__other"] = value
+
+    def add_checkpoint(self):
+        self.bound_values.maps.insert(0, {})
+
+    def revert(self):
+        self.bound_values.maps.pop(0)
+
+    def parse_child(self, target: str):
+        pc = ParseContext(self.bits, self.i)
+        for r in pc.parse(target):
+            self.add_checkpoint()
+            self.i = pc.i
+            self.revert()
+
+    def parse(self, target):
+        for p, f in _pattern_register[target]:
+            self.add_checkpoint()
+            # print(p)
+            if p.parse(self):
+                try:
+                    # print(f, self.bound_values)
+                    args = {name: value for name, value in self.bound_values.items() if not name.startswith("_")}
+                    for opt in f(**args, _other=self.other_bits):
+                        yield opt
+                except _UnknownInstruction:
+                    # print("Unknown")
+                    pass
+                except _IllegalInstruction:
+                    # print("Illegal")
+                    raise _IllegalInstruction(self.bits)
+                self.revert()
 
 
 class Pattern:
@@ -102,9 +236,12 @@ class Pattern:
                 out.append(BoundFixedSize(len(s), s))
             elif s[0] == '{':
                 assert s[-1] == '}'
-                name, size = s[1:-1].split(':')
-                size = int(size)
-                out.append(BoundFixedSize(size, name))
+                name, arg = s[1:-1].split(':')
+                if arg.isdecimal():
+                    size = int(arg)
+                    out.append(BoundFixedSize(size, name))
+                else:
+                    out.append(BoundSubPattern(name, arg))
         if len(out) == 1:
             return out[0]
         else:
@@ -117,7 +254,11 @@ class FixedPattern(Pattern):
     value: int
 
     def parse(self, context: ParseContext) -> bool:
-        return context.read(self.bit_count) == self.value
+        if int(context.read(self.bit_count)) == self.value:
+            context.other_bits += tuple(range(context.i - self.bit_count, context.i))
+            return True
+        else:
+            return False
 
 
 @dataclass
@@ -132,14 +273,31 @@ class BoundFixedSize(Pattern):
 
 
 @dataclass
+class BoundSubPattern(Pattern):
+    name: str
+    target: str
+
+    def parse(self, context: ParseContext) -> bool:
+        has_result = False
+        for result in context.parse_child(self.target):
+            if has_result:
+                raise RuntimeError(f"Multiple different parse options for {self.target}")
+            has_result = True
+            context.bind(self.name, result)
+        return has_result
+
+
+@dataclass
 class PatternList(Pattern):
     patterns: list[Pattern]
 
     def parse(self, context: ParseContext) -> bool:
-        for i,p in enumerate(self.patterns):
+        context.add_checkpoint()
+        for i, p in enumerate(self.patterns):
             try:
                 if not p.parse(context):
                     # print(f"Failed {i}/{len(self.patterns)}", p, context)
+                    context.revert()
                     return False
                 else:
                     # print(f"Success {i}/{len(self.patterns)}", p, context)
@@ -158,49 +316,35 @@ def check(cond: int, illegal: bool = False):
             raise _UnknownInstruction
 
 
-_pattern_register: list[tuple[Pattern, Callable]] = []
+_pattern_register: dict[str, list[tuple[Pattern, Callable]]] = defaultdict(list)
 
 
-def pat(pattern: str):
+def pat(cat: str, pattern: str):
     def wrapper(f):
-        _pattern_register.append((Pattern.from_string(pattern), f))
+        _pattern_register[cat].append((Pattern.from_string(pattern), f))
         return f
 
     return wrapper
 
 
-def label(*, rel_target=None, abs_target=None):
+def inst(pattern: str):
+    return pat("inst", pattern)
+
+
+def label(bit_section: BitSection, *, rel_target=None, abs_target=None):
     if [rel_target, abs_target].count(None) != 1:
         raise TypeError("Exactly one of rel_target, abs_target needs to be given")
-    if rel_target is not None:
-        return f"(rel_target: {rel_target.dec()})"
-    elif abs_target is not None:
-        return f"(abs_target: {abs_target.dec()})"
-    else:
-        assert False, "Unreachable"
+    return DecodedJumpTarget(bit_section, (rel_target is not None), rel_target or abs_target)
 
 
-def decode(bits: bitarray | str, prefix: list[DecodedInstruction] = None) -> Iterable[DecodedInstruction]:
-    prefix = prefix or []
+def decode(bits: bitarray | str) -> Iterable[DecodedInstruction]:
     if isinstance(bits, str):
         bits = hex2ba(bits)
-    for p, f in _pattern_register:
-        con = ParseContext(bits)
-        if p.parse(con):
-            try:
-                for opt in f(**con.bound_values):
-                    opt: DecodedInstruction
-                    if opt.is_prefix:
-                        remaining = con.bits[con.i:]
-                        try:
-                            yield from decode(remaining, [*opt.prefix_list, opt])
-                        except _NotEnoughBits:
-                            opt.prefix_list = prefix + opt.prefix_list
-                            yield opt
-                    else:
-                        opt.prefix_list = prefix + opt.prefix_list
-                        yield opt
-            except _UnknownInstruction:
-                continue
-            except _IllegalInstruction:
-                raise _IllegalInstruction(bits)
+    any_parse = False
+    con = ParseContext(bits)
+    for opt in con.parse("inst"):
+        opt: DecodedInstruction
+        yield opt
+        any_parse = True
+    if not any_parse:
+        raise _UnknownInstruction(bits)
