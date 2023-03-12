@@ -1,7 +1,10 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from decoder_lib import check, inst, label, DecodedInstruction, DecodedAtom, BitVector, BitSection
+from decoder_lib import check, inst, label, DecodedInstruction, DecodedAtom, BitVector, BitSection, \
+    ExtensionRequirement, pat
+
+noreq = ExtensionRequirement(())
 
 
 @dataclass(frozen=True)
@@ -12,11 +15,11 @@ class BaseIsaOpcodeInfo:
     has_reg_immediate: bool = True
     sign_extend: bool = True
     extra_check: Callable = None
-    required_extensions: tuple[str, ...] = ()
+    required_extensions: ExtensionRequirement = noreq
 
 
 SIZES = {
-    1: ('x', ())
+    1: ('x', noreq)
 }
 
 BASE_OPCODES = {
@@ -39,21 +42,26 @@ BASE_OPCODES = {
 }
 
 
-@inst("00 SS CCCC  AAA BBB 00")
-def reg_reg(SS, CCCC: BitVector, AAA, BBB, _other: BitSection):
+@pat("reg", "RRR")
+def reg(RRR, _other: BitSection):
+    yield DecodedAtom(RRR.bit_section, noreq, "register", RRR.dec(1))
+
+
+@inst("00 SS CCCC  {a:reg} {b:reg} 00")
+def reg_reg(SS, CCCC: BitVector, a, b, _other: BitSection):
     check(SS in SIZES)
     opcodes = BASE_OPCODES[CCCC]
     for opcode in opcodes:
         if not opcode.has_2_reg_mode:
             continue
-        if opcode.extra_check is not None and not opcode.extra_check(AAA, BBB):
+        if opcode.extra_check is not None and not opcode.extra_check(a, b):
             continue
         yield DecodedInstruction("{opcode}{size} %r{size}{a}, %r{size}{b}", {
-            "opcode": DecodedAtom(CCCC.bit_section, "opcode", opcode.name),
-            "size": DecodedAtom(SS.bit_section, "size", SIZES[SS][0]),
-            "a": DecodedAtom(AAA.bit_section, "register", AAA.dec(1)),
-            "b": DecodedAtom(BBB.bit_section, "register", BBB.dec(1)),
-        }, general_bit_section=_other)
+            "opcode": DecodedAtom(CCCC.bit_section, opcode.required_extensions, "opcode", opcode.name),
+            "size": DecodedAtom(SS.bit_section, SIZES[SS][1], "size", SIZES[SS][0]),
+            "a": a,
+            "b": b,
+        }, general_bit_section=_other, general_required_extensions=noreq)
 
 
 @inst("01 SS CCCC  AAA IIIII")
@@ -70,11 +78,11 @@ def reg_immediate(SS, CCCC, AAA, IIIII, _other):
         if opcode.extra_check is not None and not opcode.extra_check(AAA, IIIII):
             continue
         yield DecodedInstruction("{opcode}{size} %r{size}{a}, {imm}", {
-            "opcode": DecodedAtom(CCCC.bit_section, "opcode", opcode.name),
-            "size": DecodedAtom(SS.bit_section, "size", SIZES[SS][0]),
-            "a": DecodedAtom(AAA.bit_section, "register", AAA.dec(1)),
-            "imm": DecodedAtom(imm.bit_section, "register", imm.dec(1)),
-        }, general_bit_section=_other)
+            "opcode": DecodedAtom(CCCC.bit_section, opcode.required_extensions, "opcode", opcode.name),
+            "size": DecodedAtom(SS.bit_section, SIZES[SS][1], "size", SIZES[SS][0]),
+            "a": DecodedAtom(AAA.bit_section, noreq, "register", AAA.dec(1)),
+            "imm": DecodedAtom(imm.bit_section, noreq, "register", imm.dec(1)),
+        }, general_bit_section=_other, general_required_extensions=noreq)
 
 
 BASE_CONDITIONS = {
@@ -101,21 +109,21 @@ def condition(D, CCCC, d, _other):
     dest = (D @ d).signed(9)
     if CCCC == 14 and dest == 0:
         yield DecodedInstruction("{opcode}", {
-            "opcode": DecodedAtom((dest @ CCCC).bit_section, "special_opcode", "hlt")
-        }, general_bit_section=_other)
+            "opcode": DecodedAtom((dest @ CCCC).bit_section, noreq, "special_opcode", "hlt")
+        }, general_bit_section=_other, general_required_extensions=noreq)
     elif CCCC == 15:
         if dest == 0:
             yield DecodedInstruction("{opcode}", {
-                "opcode": DecodedAtom((dest @ CCCC).bit_section, "special_opcode", "nop")
-            }, general_bit_section=_other)
+                "opcode": DecodedAtom((dest @ CCCC).bit_section, noreq, "special_opcode", "nop")
+            }, general_bit_section=_other, general_required_extensions=noreq)
         else:
             yield DecodedInstruction("{opcode} {target}", {
-                "opcode": DecodedAtom(CCCC.bit_section, "opcode", "nop"),
-                "target": label(dest.bit_section, rel_target=dest)
-            }, general_bit_section=_other)
+                "opcode": DecodedAtom(CCCC.bit_section, noreq, "opcode", "nop"),
+                "target": label(rel_target=dest)
+            }, general_bit_section=_other, general_required_extensions=noreq)
     else:
         cond_name = BASE_CONDITIONS[CCCC]
         yield DecodedInstruction("{opcode} {target}", {
-            "opcode": DecodedAtom(CCCC.bit_section, "jump_opcode", f"j{cond_name}"),
-            "target": label(dest.bit_section, rel_target=dest)
-        }, general_bit_section=_other)
+            "opcode": DecodedAtom(CCCC.bit_section, noreq, "jump_opcode", f"j{cond_name}"),
+            "target": label(rel_target=dest)
+        }, general_bit_section=_other, general_required_extensions=noreq)

@@ -1,3 +1,6 @@
+from decoder_lib import ExtensionRequirement, Extension
 from .base_isa import SIZES
 
-SIZES[2] = ('d', ('double-word-operations',))
+dw = Extension("double-word-operations", "d", (0, 14))
+
+SIZES[2] = ('d', ExtensionRequirement.single(dw))

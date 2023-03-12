@@ -94,9 +94,40 @@ class RenderContext:
     pass
 
 
+@dataclass(frozen=True)
+class Extension:
+    name: str
+    short: str
+    bit: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class ExtensionRequirement:
+    extensions: tuple[tuple[Extension, ...], ...]
+
+    def union(*args: ExtensionRequirement):
+        required = []
+        for a in args:
+            for e in a.extensions:
+                if len(e) == 1:
+                    required.append(e[0])
+        choices = []
+        for a in args:
+            for e in a.extensions:
+                if len(e) != 1:
+                    if any(o in required for o in e):
+                        continue
+                    choices.append(e)
+        return ExtensionRequirement((*((e,) for e in required), *choices))
+
+    @classmethod
+    def single(cls, *args: Extension):
+        return ExtensionRequirement(tuple(((a,) for a in args)))
+
+
 class DecodedPart:
     bit_section: BitSection
-    required_extensions: tuple[str, ...]
+    required_extensions: ExtensionRequirement
 
     def render(self, context: RenderContext) -> str:
         raise NotImplementedError
@@ -105,6 +136,7 @@ class DecodedPart:
 @dataclass
 class DecodedAtom(DecodedPart):
     bit_section: BitSection
+    required_extensions: ExtensionRequirement
     name: str
     value: str
 
@@ -115,6 +147,7 @@ class DecodedAtom(DecodedPart):
 @dataclass
 class DecodedJumpTarget(DecodedPart):
     bit_section: BitSection
+    required_extensions: ExtensionRequirement
     is_relative: bool
     value: BitVector
     instruction_start: BitIndex = None
@@ -131,6 +164,7 @@ class DecodedInstruction(DecodedPart):
     format_string: str
     values: dict[str, DecodedPart | list[DecodedPart]]
     general_bit_section: BitSection
+    general_required_extensions: ExtensionRequirement
 
     def render(self, context: RenderContext) -> str:
         strings = {}
@@ -149,9 +183,10 @@ class DecodedInstruction(DecodedPart):
 
     @property
     def required_extensions(self):
-        return tuple(set().union(*(v.required_extensions
-                                   for val in self.values.values()
-                                   for v in (val if isinstance(val, list) else [val]))))
+        return ExtensionRequirement.union(self.general_required_extensions,
+                                          *(v.required_extensions
+                                            for val in self.values.values()
+                                            for v in (val if isinstance(val, list) else [val])))
 
 
 @dataclass
@@ -201,6 +236,7 @@ class ParseContext:
         for r in pc.parse(target):
             self.add_checkpoint()
             self.i = pc.i
+            yield r
             self.revert()
 
     def parse(self, target):
@@ -278,13 +314,10 @@ class BoundSubPattern(Pattern):
     target: str
 
     def parse(self, context: ParseContext) -> bool:
-        has_result = False
         for result in context.parse_child(self.target):
-            if has_result:
-                raise RuntimeError(f"Multiple different parse options for {self.target}")
-            has_result = True
             context.bind(self.name, result)
-        return has_result
+            return True
+        return False
 
 
 @dataclass
@@ -331,15 +364,27 @@ def inst(pattern: str):
     return pat("inst", pattern)
 
 
-def label(bit_section: BitSection, *, rel_target=None, abs_target=None):
+def label(bit_section: BitSection = None, req: ExtensionRequirement = ExtensionRequirement(()), *, rel_target=None, abs_target=None):
     if [rel_target, abs_target].count(None) != 1:
         raise TypeError("Exactly one of rel_target, abs_target needs to be given")
-    return DecodedJumpTarget(bit_section, (rel_target is not None), rel_target or abs_target)
+    target = rel_target or abs_target
+    bit_section = bit_section or target.bit_section
+    return DecodedJumpTarget(bit_section, req, (rel_target is not None), target)
 
 
-def decode(bits: bitarray | str) -> Iterable[DecodedInstruction]:
+def _to_bitarray(bits: bitarray | str | bytes) -> bitarray:
     if isinstance(bits, str):
         bits = hex2ba(bits)
+    if isinstance(bits, bytes):
+        res = bitarray(endian="big")
+        res.frombytes(bits)
+        bits = res
+    return bits
+
+
+def decode(bits: bitarray | str | bytes) -> Iterable[DecodedInstruction]:
+    """ Returns all possible decodings """
+    bits = _to_bitarray(bits)
     any_parse = False
     con = ParseContext(bits)
     for opt in con.parse("inst"):
@@ -348,3 +393,21 @@ def decode(bits: bitarray | str) -> Iterable[DecodedInstruction]:
         any_parse = True
     if not any_parse:
         raise _UnknownInstruction(bits)
+
+
+def disassamble(bits: bitarray | str | bytes) -> Iterable[DecodedInstruction]:
+    """ Returns consecutive instructions and will throw an exception at the end """
+    bits = _to_bitarray(bits)
+    i = 0
+    while True:
+        con = ParseContext(bits, i)
+        try:
+            inst = next(con.parse("inst"))
+        except StopIteration:
+            raise _UnknownInstruction(con.i, bits[con.i:con.i + 16])
+        except _NotEnoughBits:
+            if con.i == len(bits):
+                return
+        else:
+            i = con.i
+            yield inst

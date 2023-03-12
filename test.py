@@ -32,5 +32,6 @@ def decode_print(b: bytes):
 
 # decode_print(bitarray("00 01 1100 000 000 00").tobytes())
 # decode_print(bitarray("10 01 0000 000 00000").tobytes())
+decode_print(bitarray("10 0 0 1110 00000100").tobytes())
 
-calculated_percent_used(16)
+# calculated_percent_used(16)
