@@ -26,12 +26,15 @@ def calculated_percent_used(bit_count: int = 8, print_all=True):
 
 def decode_print(b: bytes):
     rc = RenderContext()
-    for res in decode(b.hex()):
-        print(res.render(rc))
+    for res in decode(b):
+        extensions = ",".join('|'.join(e.short for e in es) for es in res.required_extensions.extensions)
+        print(f"{b.hex(' ', 1)}: {res.render(rc):40} | Extensions: {extensions}")
 
 
-# decode_print(bitarray("00 01 1100 000 000 00").tobytes())
+decode_print(bitarray("111 11 111  11111111 11111111 11111111 11111111 11111111 11111111 11111111 11111111").tobytes())
+# decode_print(bitarray("111 0 0000  0 0 01 0000  000 000 00").tobytes())
+# decode_print(bitarray("1010 0000  01 01 0000 000 000 00").tobytes())
 # decode_print(bitarray("10 01 0000 000 00000").tobytes())
-decode_print(bitarray("10 0 0 1110 00000100").tobytes())
+# decode_print(bitarray("10 0 0 1110 00000100").tobytes())
 
 # calculated_percent_used(16)

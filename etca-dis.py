@@ -1,6 +1,7 @@
 from argparse import ArgumentParser, FileType
 
-from decoder_lib import disassamble, RenderContext, DecodedInstruction
+from basic_blocks import nonlinear_disassemble
+from decoder_lib import linear_disassamble, RenderContext, DecodedInstruction
 import extensions
 
 
@@ -27,8 +28,15 @@ def main(args=None):
     with options.input_file as file:
         data = file.read()
     rc = RenderContext()
-    for inst in disassamble(data):
-        print_instruction(data, rc, inst)
+
+    bbs = nonlinear_disassemble(data, log=lambda inst: print_instruction(data, rc, inst))
+    # bbs = nonlinear_disassemble(data)
+    bbs.sort(key=lambda bb: bb.start_address)
+
+    for bb in bbs:
+        for inst in bb.instructions:
+            print_instruction(data, rc, inst)
+        print()
 
 
 if __name__ == '__main__':

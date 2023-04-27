@@ -1,58 +1,69 @@
-from decoder_lib import pat, label, check, DecodedInstruction, Extension, ExtensionRequirement, inst, DecodedAtom
+from decoder_lib import pat, label, check, DecodedInstruction, Extension, ExtensionRequirement, inst, DecodedAtom, \
+    RenderContext
 
-from .base_isa import BASE_OPCODES, BaseIsaOpcodeInfo, BASE_CONDITIONS, noreq
+from .base_isa import noreq, BasicInstruction, ZeroExtend, TwoReg, RegImm, Nop, Never, CondJump, Always
 
-sad = Extension("stack-and-functions", "sad", (0, 1))
-sad_req = ExtensionRequirement.single(sad)
-
-BASE_OPCODES[12].append(BaseIsaOpcodeInfo("pop", "{name}{size} {arg2}", has_reg_immediate=False,
-                                          extra_check=lambda A, B: B == 6, sign_extend=False,
-                                          required_extensions=sad_req))
-
-BASE_OPCODES[13].append(BaseIsaOpcodeInfo("push", "{name}{size} {arg1}",
-                                          extra_check=lambda A, B: A == 6, sign_extend=False,
-                                          required_extensions=sad_req))
+saf = Extension("stack-and-functions", "saf", (1, 1))
+saf_req = ExtensionRequirement.single(saf)
 
 
-@inst("10 1 0 1111 {r:reg} 0 CCCC")
-def reg_jump(r, CCCC, _other):
-    if CCCC == 15:
-        yield DecodedInstruction("{opcode} %r{reg}", {
-            "opcode": DecodedAtom(CCCC.bit_section, noreq, "special_opcode", "nop"),
-            "reg": r
-        }, _other, sad_req)
+class Pop(TwoReg, ZeroExtend, opcode=12):
+    name = "pop"
+    format_string = "{opcode}{size} {arg1}"
+    required_extensions = saf_req
+
+    @classmethod
+    def extra_check(cls, a, b):
+        return b.index == 6
+
+
+class Push(TwoReg, RegImm, ZeroExtend, opcode=13):
+    name = "push"
+    format_string = "{name}{size} {arg2}"
+    required_extensions = saf_req
+
+    @classmethod
+    def extra_check(cls, a, b):
+        return a.index == 6
+
+
+class Return(CondJump):
+    format_string = "ret{cond}"
+
+    def get_rendered_arguments(self, context: RenderContext) -> dict[str, str]:
+        return {
+            "cond": "" if isinstance(self.cond, Always) else self.cond.name
+        }
+
+
+@inst("10 1 0 1111 {r:reg} 0 {c:cond}")
+def reg_jump(r, c, _other):
+    if isinstance(c, Never):
+        yield Nop(c, r, _other, saf_req)
+    elif r.index == 7:
+        yield Return(c, r, _other, saf_req)
     else:
-        con = BASE_CONDITIONS[CCCC]
-        if r.value == "7":
-            yield DecodedInstruction("{opcode}{con}", {
-                "opcode": DecodedAtom(r.bit_section, sad_req, "special_opcode", "ret"),
-                "con": DecodedAtom(CCCC.bit_section, noreq, "condition", con),
-            }, _other, sad_req)
-        else:
-            yield DecodedInstruction("{opcode} %r{reg}", {
-                "opcode": DecodedAtom(r.bit_section, noreq, "condition_opcode", f"j{con}"),
-                "reg": r,
-            }, _other, sad_req)
+        yield CondJump(c, r, _other, saf_req)
 
 
-@inst("10 1 0 1111 {r:reg} 1 CCCC")
-def reg_call(r, CCCC, _other):
-    if CCCC == 15:
-        yield DecodedInstruction("{opcode} %r{reg}", {
-            "opcode": DecodedAtom(CCCC.bit_section, sad_req, "special_opcode", "nop (call)"),
-            "reg": r
-        }, _other, sad_req)
+class Call(CondJump):
+    format_string = "call{cond} {target}"
+
+    def get_rendered_arguments(self, context: RenderContext) -> dict[str, str]:
+        return {
+            "cond": "" if isinstance(self.cond, Always) else self.cond.name,
+            "target": self.target.render(context)
+        }
+
+
+@inst("10 1 0 1111 {r:reg} 1 {c:cond}")
+def reg_call(r, c, _other):
+    if isinstance(c, Never):
+        pass
     else:
-        con = BASE_CONDITIONS[CCCC]
-        yield DecodedInstruction("{opcode} %r{reg}", {
-            "opcode": DecodedAtom(r.bit_section, sad_req, "condition_opcode", f"call{con}"),
-            "reg": r,
-        }, _other, sad_req)
+        yield Call(c, r, _other, saf_req)
 
 
 @inst("10 1 1 {dest:12}")
 def call_rel(dest, _other):
-    dest = dest.signed(12)
-    yield DecodedInstruction("call {dest}", {
-        "dest": label(rel_target=dest)
-    }, _other, sad_req)
+    yield Call(Always(()), label(rel_target=dest.signed()), _other, saf_req)
